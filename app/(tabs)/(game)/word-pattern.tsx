@@ -8,7 +8,7 @@ import Animated, {
   withTiming
 } from 'react-native-reanimated';
 import { useFonts, Inter_700Bold, Inter_500Medium } from '@expo-google-fonts/inter';
-import { Info } from 'lucide-react-native';
+import { Info, Trophy, Delete } from 'lucide-react-native';
 import CountdownTimer from '@/components/CountdownTimer';
 import { useGameSettings } from '@/contexts/GameSettingsContext';
 import { getRandomWords } from '@/utils/wordBank';
@@ -19,19 +19,25 @@ const GAME_CONFIG = {
     hiddenLetters: 2,
     timeLimit: 30,
     rounds: 10,
-    pointsPerWord: 100
+    pointsPerWord: 100,
+    bonusTimePoints: 5,
+    streakBonus: 50
   },
   medium: {
     hiddenLetters: 3,
     timeLimit: 25,
     rounds: 10,
-    pointsPerWord: 150
+    pointsPerWord: 150,
+    bonusTimePoints: 8,
+    streakBonus: 75
   },
   hard: {
     hiddenLetters: 4,
     timeLimit: 20,
     rounds: 10,
-    pointsPerWord: 200
+    pointsPerWord: 200,
+    bonusTimePoints: 10,
+    streakBonus: 100
   }
 };
 
@@ -44,23 +50,23 @@ type GameState = {
   userInput: string[];
   isCorrect: boolean | null;
   showHint: boolean;
+  timeLeft: number;
 };
+
+const KEYBOARD_LAYOUT = [
+  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+  ['Z', 'X', 'C', 'V', 'B', 'N', 'M', '⌫'],
+];
 
 export default function WordPatternGame() {
   const [fontsLoaded] = useFonts({
     Inter_700Bold,
     Inter_500Medium,
   });
-
+  
   const { difficulty } = useGameSettings();
   const config = GAME_CONFIG[difficulty];
-
-  const [score, setScore] = useState(0);
-  const [round, setRound] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [isGameActive, setIsGameActive] = useState(true);
-  const [showTutorial, setShowTutorial] = useState(true);
-  const [shake, setShake] = useState(false);
 
   const [gameState, setGameState] = useState<GameState>(() => {
     const word = getRandomWords(difficulty, 1)[0];
@@ -74,8 +80,19 @@ export default function WordPatternGame() {
       userInput: Array(hiddenIndices.length).fill(''),
       isCorrect: null,
       showHint: false,
+      timeLeft: config.timeLimit
     };
   });
+
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+  const [currentLevel, setCurrentLevel] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [isGameActive, setIsGameActive] = useState(true);
+  const [showTutorial, setShowTutorial] = useState(true);
+  const [shake, setShake] = useState(false);
+  const [roundComplete, setRoundComplete] = useState(false);
+  const [currentInputIndex, setCurrentInputIndex] = useState(0);
 
   function generateHiddenIndices(word: string, count: number): number[] {
     const indices = Array.from({ length: word.length }, (_, i) => i);
@@ -104,6 +121,33 @@ export default function WordPatternGame() {
     }
   };
 
+  const handleKeyPress = (key: string) => {
+    if (!isGameActive || gameState.isCorrect !== null) return;
+
+    if (key === '⌫') {
+      // Handle backspace
+      if (currentInputIndex > 0) {
+        const newInput = [...gameState.userInput];
+        newInput[currentInputIndex - 1] = '';
+        setGameState(prev => ({ ...prev, userInput: newInput }));
+        setCurrentInputIndex(prev => prev - 1);
+      }
+    } else {
+      // Handle letter input
+      if (currentInputIndex < gameState.hiddenIndices.length) {
+        const newInput = [...gameState.userInput];
+        newInput[currentInputIndex] = key;
+        setGameState(prev => ({ ...prev, userInput: newInput }));
+        setCurrentInputIndex(prev => prev + 1);
+
+        // Check if all inputs are filled
+        if (currentInputIndex === gameState.hiddenIndices.length - 1) {
+          checkAnswer([...newInput.slice(0, currentInputIndex), key]);
+        }
+      }
+    }
+  };
+
   const checkAnswer = (input: string[]) => {
     const correct = gameState.hiddenIndices.every((hiddenIndex, i) => 
       input[i] === gameState.pattern[hiddenIndex]
@@ -112,9 +156,29 @@ export default function WordPatternGame() {
     setGameState(prev => ({ ...prev, isCorrect: correct }));
 
     if (correct) {
-      const streakBonus = Math.floor(streak / 3) * 50;
-      setScore(prev => prev + config.pointsPerWord + streakBonus);
+      // Calculate score based on:
+      // 1. Base points for the word
+      // 2. Time bonus (more time left = more points)
+      // 3. Streak bonus
+      const timeBonus = Math.floor(gameState.timeLeft * config.bonusTimePoints);
+      const streakBonus = Math.floor(streak / 3) * config.streakBonus;
+      const totalPoints = config.pointsPerWord + timeBonus + streakBonus;
+
+      setScore(prev => {
+        const newScore = prev + totalPoints;
+        if (newScore > highScore) {
+          setHighScore(newScore);
+        }
+        return newScore;
+      });
       setStreak(prev => prev + 1);
+
+      // Show success animation
+      Animated.sequence([
+        Animated.spring(1.2, { damping: 5 }),
+        Animated.spring(1, { damping: 4 })
+      ]).start();
+
       setTimeout(nextRound, 1500);
     } else {
       setStreak(0);
@@ -129,7 +193,8 @@ export default function WordPatternGame() {
   };
 
   const nextRound = () => {
-    if (round >= config.rounds - 1) {
+    if (currentLevel >= config.rounds - 1) {
+      setRoundComplete(true);
       setIsGameActive(false);
       return;
     }
@@ -137,7 +202,7 @@ export default function WordPatternGame() {
     const word = getRandomWords(difficulty, 1)[0];
     const hiddenIndices = generateHiddenIndices(word.word, config.hiddenLetters);
     
-    setRound(prev => prev + 1);
+    setCurrentLevel(prev => prev + 1);
     setGameState({
       currentWord: word.word,
       definition: word.definition,
@@ -147,7 +212,9 @@ export default function WordPatternGame() {
       userInput: Array(hiddenIndices.length).fill(''),
       isCorrect: null,
       showHint: false,
+      timeLeft: config.timeLimit,
     });
+    setCurrentInputIndex(0);
   };
 
   const resetGame = () => {
@@ -155,9 +222,10 @@ export default function WordPatternGame() {
     const hiddenIndices = generateHiddenIndices(word.word, config.hiddenLetters);
     
     setScore(0);
-    setRound(0);
+    setCurrentLevel(0);
     setStreak(0);
     setIsGameActive(true);
+    setRoundComplete(false);
     setGameState({
       currentWord: word.word,
       definition: word.definition,
@@ -167,7 +235,9 @@ export default function WordPatternGame() {
       userInput: Array(hiddenIndices.length).fill(''),
       isCorrect: null,
       showHint: false,
+      timeLeft: config.timeLimit,
     });
+    setCurrentInputIndex(0);
   };
 
   const Tutorial = () => (
@@ -184,6 +254,15 @@ export default function WordPatternGame() {
           <Text style={styles.tutorialText}>
             3. Build a streak for bonus points!
           </Text>
+          <Text style={styles.tutorialText}>
+            4. Complete words quickly for time bonuses
+          </Text>
+        </View>
+        <View style={styles.bonusInfo}>
+          <Text style={styles.bonusTitle}>Scoring:</Text>
+          <Text style={styles.bonusText}>• Word completion: {config.pointsPerWord} points</Text>
+          <Text style={styles.bonusText}>• Time bonus: {config.bonusTimePoints} points/second</Text>
+          <Text style={styles.bonusText}>• Streak bonus: {config.streakBonus} points/3 words</Text>
         </View>
         <Pressable
           style={styles.tutorialButton}
@@ -201,16 +280,13 @@ export default function WordPatternGame() {
   return (
     <LinearGradient colors={['#8A2BE2', '#4B0082']} style={styles.container}>
       {showTutorial && <Tutorial />}
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}>
+      <View style={styles.gameWrapper}>
         <View style={styles.header}>
           <View style={styles.scoreContainer}>
             <Text style={styles.score}>{score}</Text>
             <Text style={styles.levelInfo}>
               {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)} - 
-              Round {round + 1}/{config.rounds}
+              Round {currentLevel + 1}/{config.rounds}
             </Text>
           </View>
           <View style={styles.headerRight}>
@@ -220,7 +296,10 @@ export default function WordPatternGame() {
               isRunning={isGameActive && gameState.isCorrect === null}
             />
             {streak > 0 && (
-              <Text style={styles.streak}>🔥 {streak}</Text>
+              <View style={styles.streakContainer}>
+                <Trophy size={16} color="#FFD700" />
+                <Text style={styles.streak}>{streak}</Text>
+              </View>
             )}
             <Pressable
               style={styles.infoButton}
@@ -230,8 +309,13 @@ export default function WordPatternGame() {
           </View>
         </View>
 
-        <View style={styles.gameCard}>
-          <Text style={styles.definition}>{gameState.definition}</Text>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          bounces={false}>
+          <View style={styles.gameCard}>
+            <Text style={styles.definition}>{gameState.definition}</Text>
           
           {!gameState.showHint && gameState.isCorrect === null && (
             <Pressable
@@ -265,25 +349,27 @@ export default function WordPatternGame() {
             {gameState.pattern.map((letter, index) => {
               const isHidden = gameState.hiddenIndices.includes(index);
               const inputIndex = gameState.hiddenIndices.indexOf(index);
+              const isCurrent = inputIndex === currentInputIndex;
               
               if (isHidden) {
                 return (
-                  <TextInput
+                  <View
                     key={index}
                     style={[
                       styles.letterInput,
                       gameState.isCorrect === false && 
                       gameState.userInput[inputIndex] && 
+                      gameState.userInput[inputIndex] &&
                       styles.incorrectInput,
                       gameState.isCorrect === true && 
                       styles.correctInput,
+                      isCurrent && styles.currentInput,
                     ]}
-                    value={gameState.userInput[inputIndex]}
-                    onChangeText={(text) => handleInputChange(text, inputIndex)}
-                    maxLength={1}
-                    autoCapitalize="characters"
-                    editable={isGameActive && gameState.isCorrect === null}
-                  />
+                    >
+                    <Text style={styles.letter}>
+                      {gameState.userInput[inputIndex]}
+                    </Text>
+                  </View>
                 );
               }
 
@@ -299,11 +385,18 @@ export default function WordPatternGame() {
             <View style={styles.gameOverContainer}>
               <Text style={[
                 styles.gameOverText,
-                round >= config.rounds - 1 ? styles.completedText : styles.timeUpText
+                roundComplete ? styles.completedText : styles.timeUpText
               ]}>
-                {round >= config.rounds - 1 ? 'Game Complete!' : 'Time\'s Up!'}
+                {roundComplete ? 'Game Complete!' : 'Time\'s Up!'}
               </Text>
-              <Text style={styles.finalScoreText}>Final Score: {score}</Text>
+              {roundComplete && (
+                <>
+                  <Text style={styles.finalScoreText}>Final Score: {score}</Text>
+                  {score > highScore && (
+                    <Text style={styles.newHighScoreText}>New High Score! 🏆</Text>
+                  )}
+                </>
+              )}
               <Pressable
                 style={styles.playAgainButton}
                 onPress={resetGame}>
@@ -311,8 +404,34 @@ export default function WordPatternGame() {
               </Pressable>
             </View>
           )}
-        </View>
-      </ScrollView>
+          </View>
+        </ScrollView>
+
+        {/* Virtual Keyboard */}
+        {isGameActive && gameState.isCorrect === null && (
+          <View style={styles.keyboard}>
+            {KEYBOARD_LAYOUT.map((row, rowIndex) => (
+              <View key={rowIndex} style={styles.keyboardRow}>
+                {row.map((key) => (
+                  <Pressable
+                    key={key}
+                    style={[
+                      styles.key,
+                      key === '⌫' && styles.backspaceKey,
+                    ]}
+                    onPress={() => handleKeyPress(key)}>
+                    {key === '⌫' ? (
+                      <Delete size={20} color="#4B0082" />
+                    ) : (
+                      <Text style={styles.keyText}>{key}</Text>
+                    )}
+                  </Pressable>
+                ))}
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
     </LinearGradient>
   );
 }
@@ -321,12 +440,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  gameWrapper: {
+    flex: 1,
+    paddingTop: 40,
+  },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
     padding: 20,
-    paddingTop: 40,
+    paddingBottom: 20,
   },
   header: {
     flexDirection: 'row',
@@ -335,10 +458,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginHorizontal: 20,
+    marginBottom: 16,
   },
   scoreContainer: {
     alignItems: 'flex-start',
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   score: {
     fontSize: 32,
@@ -351,19 +480,19 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     opacity: 0.9,
   },
-  headerRight: {
+  streakContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-  },
-  streak: {
-    fontSize: 20,
-    color: '#fff',
-    fontFamily: 'Inter_700Bold',
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 12,
+    gap: 4,
+  },
+  streak: {
+    fontSize: 16,
+    color: '#fff',
+    fontFamily: 'Inter_700Bold',
   },
   infoButton: {
     padding: 8,
@@ -469,6 +598,53 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     textAlign: 'center',
   },
+  keyboard: {
+    marginTop: 20,
+    padding: 10,
+    marginHorizontal: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 20,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  keyboardRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 4,
+    marginBottom: 6,
+    paddingHorizontal: 10,
+  },
+  key: {
+    minWidth: 30,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: 'rgba(138, 43, 226, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.41,
+  },
+  backspaceKey: {
+    minWidth: 50,
+    backgroundColor: 'rgba(255, 75, 75, 0.1)',
+  },
+  keyText: {
+    fontSize: 16,
+    color: '#4B0082',
+    fontFamily: 'Inter_700Bold',
+  },
+  currentInput: {
+    borderColor: '#FFD700',
+    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    transform: [{ scale: 1.05 }],
+  },
   timeUpText: {
     color: '#FF4B4B',
   },
@@ -479,6 +655,14 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: '#4B0082',
     fontFamily: 'Inter_500Medium',
+  },
+  newHighScoreText: {
+    fontSize: 18,
+    color: '#FFD700',
+    fontFamily: 'Inter_700Bold',
+    textShadowColor: 'rgba(0, 0, 0, 0.2)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   playAgainButton: {
     backgroundColor: '#9932CC',
@@ -545,6 +729,24 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
     fontFamily: 'Inter_500Medium',
+  },
+  bonusInfo: {
+    backgroundColor: 'rgba(138, 43, 226, 0.1)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+  },
+  bonusTitle: {
+    fontSize: 16,
+    color: '#4B0082',
+    fontFamily: 'Inter_700Bold',
+    marginBottom: 8,
+  },
+  bonusText: {
+    fontSize: 14,
+    color: '#666',
+    fontFamily: 'Inter_500Medium',
+    marginBottom: 4,
   },
   tutorialButton: {
     backgroundColor: '#9932CC',
